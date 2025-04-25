@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Subscribe to News</title>
+  <style>
+    body { font-family: Arial; padding: 2rem; }
+    input[type="email"] { padding: 0.5rem; width: 300px; }
+    a, input[type="submit"] { padding: 0.5rem 1rem; text-decoration: none; margin-left: 0.5rem; display: inline-block; }
+    form { margin-top: 1rem; }
+    .facebook { background-color: #3b5998; }
+    .google { background-color: #db4437; }
+  </style>
+</head>
+<body>
+  <h1>Subscribe to News</h1>
+  <p>Choose how you want to subscribe:</p>
+
+  <h2>📧 Subscribe via Email</h2>
+  <form action="/subscribe/email" method="POST">
+    <input type="email" name="email" placeholder="Your email address" required />
+    <input type="submit" value="Subscribe" />
+  </form> <br> <br>
+
+  
+  <h3>Or log in with:</h3>
+
+  <ul>
+    <li><a href="/subscribe/facebook" style="background:#3b5998; color:white;">📘 Continue with Facebook</a></li> <br><br>
+    <li><a href="/subscribe/google" style="background:#db4437; color:white;">🔎 Continue with Google</a></li> <br> <br>
+    <h1>Gmail Integration</h1>
+    <h3>Connect to Gmail</h3>
+    <li><a href="/auth">Connect Gmail</a></li>
+  </ul>
+</body>
+</html>
+
