@@ -6,115 +6,260 @@ import (
 	"log"
 	"net/http"
 	"net/smtp"
+	"net/url"
+	"os"
 
-	"html/template"
-
+	"github.com/gorilla/sessions"
+	"github.com/joho/godotenv"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/facebook"
 	"github.com/markbates/goth/providers/google"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/markbates/goth/providers/github"
+
+	_ "github.com/mattn/go-sqlite3" // Use this or modernc.org/sqlite
 )
 
 var db *sql.DB
 
 func main() {
-	var err error
-	db, err = sql.Open("sqlite3", "./DB_subscribers")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-	createTable()
+	godotenv.Load()
 
+	// Load SESSION_SECRET from env file
+	key := os.Getenv("SESSION_SECRET")
+	if key == "" {
+		log.Fatal("❌ SESSION_SECRET is missing in .env")
+	}
+
+	store := sessions.NewCookieStore([]byte(key))
+	store.MaxAge(86400 * 30) // 30 days
+	store.Options.HttpOnly = true
+	store.Options.Secure = false
+	gothic.Store = store
+
+	// Initialize OAuth providers
 	goth.UseProviders(
-		facebook.New("FACEBOOK_CLIENT_ID", "FACEBOOK_CLIENT_SECRET", "http://localhost:8080/auth/facebook/callback"),
-		google.New("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "http://localhost:8080/auth/google/callback", "email", "profile"),
+		facebook.New(
+			os.Getenv("FACEBOOK_KEY"),
+			os.Getenv("FACEBOOK_SECRET"),
+			"http://localhost:8080/auth/facebook/callback",
+		),
+		google.New(
+			os.Getenv("GOOGLE_KEY"),
+			os.Getenv("GOOGLE_SECRET"),
+			"http://localhost:8080/auth/google/callback",
+			"email", "profile",
+		),
+		github.New(
+			os.Getenv("GITHUB_KEY"),
+			os.Getenv("GITHUB_SECRET"),
+			"http://localhost:8080/auth/github/callback",
+		),
 	)
 
-	http.HandleFunc("/", serveHome)
-	http.HandleFunc("/subscribe", handleEmailSubscription)
-	http.HandleFunc("/auth/facebook", gothic.BeginAuthHandler)
-	http.HandleFunc("/auth/facebook/callback", oauthCallback)
-	http.HandleFunc("/auth/google", gothic.BeginAuthHandler)
-	http.HandleFunc("/auth/google/callback", oauthCallback)
+	// Connect to SQLite DB
+	var err error
+	db, err = sql.Open("sqlite3", "./DB_subscribers.db")
+	if err != nil {
+		log.Fatal("❌ DB connection failed:", err)
+	}
+	defer db.Close()
 
-	fmt.Println("🚀 Server running at http://localhost:8080")
+	createTables()
+
+	// Routes
+	http.Handle("/", http.FileServer(http.Dir("./static")))
+	http.HandleFunc("/subscribe", serveSubscribe)
+	http.HandleFunc("/subscribe/email", handleEmailSubscription)
+	http.HandleFunc("/subscribers", handleListSubscribers)
+	http.HandleFunc("/view-emails", handleViewEmails)
+	http.HandleFunc("/submit", handleFormSubmission)
+
+	// OAuth Routes
+	http.HandleFunc("/auth/facebook", handleFacebookLogin)
+	http.HandleFunc("/auth/facebook/callback", handleFacebookCallback)
+	http.HandleFunc("/auth/google", handleGoogleLogin)
+	http.HandleFunc("/auth/google/callback", handleGoogleCallback)
+	http.HandleFunc("/auth/github", handleGitHubLogin)
+	http.HandleFunc("/auth/github/callback", handleGitHubCallback)
+
+	fmt.Println("✅ Server running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func serveHome(w http.ResponseWriter, r *http.Request) {
-	t, err := template.ParseFiles("index.html")
+func createTables() {
+	subscriberTable := `
+	CREATE TABLE IF NOT EXISTS subscribers (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		email TEXT UNIQUE NOT NULL
+	);`
+	messageTable := `
+	CREATE TABLE IF NOT EXISTS messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		subscriber_id INTEGER,
+		message TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(subscriber_id) REFERENCES subscribers(id)
+	);`
+	_, err := db.Exec(subscriberTable)
 	if err != nil {
-		http.Error(w, "Error loading page", http.StatusInternalServerError)
-		return
+		log.Fatal("❌ Failed to create subscribers table:", err)
 	}
-	t.Execute(w, nil)
+	_, err = db.Exec(messageTable)
+	if err != nil {
+		log.Fatal("❌ Failed to create messages table:", err)
+	}
+}
+
+func serveSubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		http.ServeFile(w, r, "./static/subscribe.html")
+	} else {
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+	}
 }
 
 func handleEmailSubscription(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
-
 	email := r.FormValue("email")
-	if email == "" {
-		http.Error(w, "Email is required", http.StatusBadRequest)
+	message := r.FormValue("message")
+
+	if email == "" || message == "" {
+		http.Error(w, "Email and message are required", http.StatusBadRequest)
 		return
 	}
 
-	_, err := db.Exec("INSERT OR IGNORE INTO subscribers (email) VALUES (?)", email)
+	// Step 1: Insert or ignore subscriber
+	_, err := db.Exec("INSERT OR IGNORE INTO subscribers(email) VALUES(?)", email)
 	if err != nil {
-		http.Error(w, "Failed to save email", http.StatusInternalServerError)
+		http.Error(w, "❌ Could not save email: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	link := fmt.Sprintf("http://localhost:8080/verify?email=%s", email)
-	go sendConfirmationEmail(email, link)
+	// Step 2: Get subscriber ID
+	var id int
+	err = db.QueryRow("SELECT id FROM subscribers WHERE email = ?", email).Scan(&id)
+	if err != nil {
+		http.Error(w, "❌ Could not fetch ID: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	fmt.Fprintf(w, "✅ Thanks! Confirmation sent to: %s", email)
+	// Step 3: Insert message
+	_, err = db.Exec("INSERT INTO messages(subscriber_id, message) VALUES(?, ?)", id, message)
+	if err != nil {
+		http.Error(w, "❌ Could not save message: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Step 4: Save email to .txt file
+	f, err := os.OpenFile("subscribers_emails.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		defer f.Close()
+		f.WriteString(email + "\n")
+	}
+
+	// Step 5: Send confirmation email
+	link := "http://localhost:8080/verify?email=" + url.QueryEscape(email)
+	sendConfirmationEmail(email, link)
+
+	fmt.Fprintf(w, "✅ Thanks %s! Confirmation sent.", email)
 }
 
 func sendConfirmationEmail(to, link string) {
-	from := "idyllacg@gmail.com"
-	password := "ivnj kxvr hqqf qsgu"
-	subject := "Please verify your email"
-	body := fmt.Sprintf("Click here to confirm your subscription:\n\n%s", link)
+	from := os.Getenv("SMTP_EMAIL")
+	password := os.Getenv("SMTP_PASS")
 
-	msg := "From: " + from + "\n" +
-		"To: " + to + "\n" +
-		"Subject: " + subject + "\n\n" + body
+	subject := "Please verify your email"
+	body := fmt.Sprintf("Click the link to confirm:\n%s", link)
+
+	msg := "From: " + from + "\nTo: " + to + "\nSubject: " + subject + "\n\n" + body
 
 	err := smtp.SendMail("smtp.gmail.com:587",
 		smtp.PlainAuth("", from, password, "smtp.gmail.com"),
 		from, []string{to}, []byte(msg))
 
 	if err != nil {
-		log.Printf("❌ Failed to send confirmation email to %s: %v", to, err)
+		log.Println("❌ Email send failed:", err)
 	} else {
-		log.Printf("✅ Confirmation email sent to %s", to)
+		log.Println("✅ Email sent to:", to)
 	}
 }
 
-func oauthCallback(w http.ResponseWriter, r *http.Request) {
-	user, err := gothic.CompleteUserAuth(w, r)
+func handleListSubscribers(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT email FROM subscribers")
 	if err != nil {
-		fmt.Fprintln(w, "Login failed:", err)
+		http.Error(w, "Failed to fetch subscribers", http.StatusInternalServerError)
 		return
 	}
-	fmt.Fprintf(w, "✅ OAuth login successful!\n\nName: %s\nEmail: %s", user.Name, user.Email)
+	defer rows.Close()
+
+	for rows.Next() {
+		var email string
+		rows.Scan(&email)
+		fmt.Fprintln(w, email)
+	}
 }
 
-func createTable() {
-	query := `
-    CREATE TABLE IF NOT EXISTS subscribers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL
-    );
-    `
-	_, err := db.Exec(query)
+func handleViewEmails(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile("subscribers_emails.txt")
 	if err != nil {
-		log.Fatalf("❌ Failed to create DB table: %v", err)
+		http.Error(w, "❌ Cannot read file", http.StatusInternalServerError)
+		return
 	}
+	w.Write(data)
+}
+
+func handleFormSubmission(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		r.ParseForm()
+		email := r.FormValue("email")
+		message := r.FormValue("message")
+		fmt.Printf("📩 New message from %s: %s\n", email, message)
+		w.Write([]byte("✅ Message received!"))
+	} else {
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+	}
+}
+
+// OAuth handlers
+func handleFacebookLogin(w http.ResponseWriter, r *http.Request) {
+	r.URL.RawQuery = "provider=facebook"
+	gothic.BeginAuthHandler(w, r)
+}
+func handleFacebookCallback(w http.ResponseWriter, r *http.Request) {
+	user, err := gothic.CompleteUserAuth(w, r)
+	if err != nil {
+		http.Error(w, "Facebook login failed", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "✅ Logged in via Facebook\nName: %s\nEmail: %s", user.Name, user.Email)
+}
+
+func handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
+	r.URL.RawQuery = "provider=google"
+	gothic.BeginAuthHandler(w, r)
+}
+func handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
+	user, err := gothic.CompleteUserAuth(w, r)
+	if err != nil {
+		http.Error(w, "Google login failed", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "✅ Logged in via Google\nName: %s\nEmail: %s", user.Name, user.Email)
+}
+
+func handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
+	r.URL.RawQuery = "provider=github"
+	gothic.BeginAuthHandler(w, r)
+}
+func handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
+	user, err := gothic.CompleteUserAuth(w, r)
+	if err != nil {
+		http.Error(w, "GitHub login failed", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "✅ Logged in via GitHub\nName: %s\nEmail: %s", user.Name, user.Email)
 }

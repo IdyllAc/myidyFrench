@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <title>Subscribe to News</title>
+  <link rel="stylesheet" href="/static/style.css">
+
   <style>
     body { font-family: Arial; padding: 2rem; text-align: center;}
     input[type="email"] { padding: 0.5rem; width: 300px; }
@@ -18,8 +20,8 @@
 
   <h2>📧 Subscribe via Email</h2>
   <form action="/subscribe/email" method="POST">
-    <input type="email" name="email" placeholder="Your email address" required />
-    <input type="submit" value="Subscribe" />
+    <input type="email" name="email" placeholder="Enter your email" required />
+    <button type="submit">Subscribe</button>
   </form> 
 
   <hr>
@@ -27,10 +29,10 @@
   
   
   <h2 style="display: inline-block;">
-    <h2>Aussi que </h2>
-    <p>login with:</p>
+    <h2>:And so on/Et aissi de suite/وكذلك ايضاً</h2>
+    <p>login via:</p>
   <a href="/auth/facebook">🔵 Facebook</a><br>
-  <h3>Ou</h3>
+  <h3>:Or via/Ou via/او عبر</h3>
   <p>login with:</p>
   <a href="/auth/google">🟢 Google</a></h2>
 
@@ -41,6 +43,38 @@
     <h3>Connect to Gmail</h3>
     <li><a href="/auth">Connect Gmail</a></li>
   </ul> -->
+
+  <br><br><hr>
+<h5>.If you have any proplem in crossing any parier,  contact us. // Si vous avez des difficultés à franchir une barière, contactez vous. // .إذا واجهت اي مشكلة في تخطئ اي حاجر, إتصل بنا</h5>
+<form action="/submit" method="POST">
+  <!-- <label for="email" style="color: lime;" >Email:</label><br> -->
+   <input type="email" name="email" placeholder="Inter your email" required><br>
+  <!-- <label for="message" style="color: lime;" >Your Message:</label> -->
+  <h4 style="color:lime; text-align: center; margin-bottom: 0;">:إدرج السؤال في الخانة المخصصة لذلك ثم قم بالإرسال بالنقر على الزر إرسال اسفله #</h4> <br> 
+  
+  <textarea name="message" placeholder="Write your message shortly here" id="textarea" cols="30" rows="10" required></textarea><br><br>
+  <button type="submit">إرسال</button> 
+ </form>
+
+  <p id="status"></p>
+
+  <script>
+    // Optional: handle response without page reload
+    const form = document.querySelector("form");
+    const status = document.getElementById("status");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const formData = new FormData(form);
+      const res = await fetch("/subscribe", {
+        method: "POST",
+        body: formData
+      });
+      const text = await res.text();
+      status.textContent = text;
+    });
+  </script>
+
 </body>
 </html>
 
