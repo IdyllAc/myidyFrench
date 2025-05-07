@@ -15,25 +15,25 @@
   </style>
 </head>
 <body>
-  <h1>📬 Subscribe to our news</h1>
-  <p>Choose how you want to subscribe:</p>
+  <h1>📬 Abonnez-vous à nos actualités.</h1>
+  <p>Choisissez votre mode d’abonnement:</p>
 
-  <h2>📧 Subscribe via Email</h2>
+  <h2>📧 Abonnez-vous par email.</h2>
   <form action="/subscribe/email" method="POST">
-    <input type="email" name="email" placeholder="Enter your email" required />
-    <button type="submit">Subscribe</button>
+    <input type="email" name="email" placeholder="Insérez votre email" required />
+    <button type="submit">Abonner</button>
   </form> 
 
   <hr>
 
   
   
-  <h2 style="display: inline-block;">
+  <h2 style="display: inline-block; position:fixed">
     <h2>:And so on/Et aissi de suite/وكذلك ايضاً</h2>
     <p>login via:</p>
   <a href="/auth/facebook">🔵 Facebook</a><br>
   <h3>:Or via/Ou via/او عبر</h3>
-  <p>login with:</p>
+  <p>login avec:</p>
   <a href="/auth/google">🟢 Google</a></h2>
 
 <!-- <ul>
@@ -45,17 +45,17 @@
   </ul> -->
 
   <br><hr>
-<h5>.If you have any proplem in crossing any parier,  contact us. // Si vous avez des difficultés à franchir une barière, contactez nous. // .إذا واجهت اي مشكلة في تخطئ حاجر, إتصل بنا</h5>
-<h4 style="color:lime; text-align:center; margin-bottom: 0;">:Valide email لطرح الأسئلة ومزيد من الإستفسار سجل عنوان بريدك الإلكتروني وقم بالتسائل والإرسال</h4>
+<h5>If you have any proplem in crossing any parier,  contact us. // Si vous avez des difficultés à franchir une barière, contactez nous. // .إذا واجهت اي مشكلة في تخطئ حاجر, إتصل بنا</h5>
+<h4 style="color: #333; text-align:center; margin-bottom: 0;">Pour poser vos questions et obtenir plus d’informations, saisissez votre adresse e-mail, formulez votre question, puis envoyez-la, "valide email".</h4>
   
 <form action="/submit" method="POST">
   <!-- <label for="email" style="color: lime;" >Email:</label><br> -->
-   <input type="email" name="email" placeholder="Inter your email" required><br>
+   <input type="email" name="email" placeholder="Insérez votre email" required><br>
   <!-- <label for="message" style="color: lime;" >Your Message:</label> -->
-  <h4 style="color:lime; text-align: center; margin-bottom: 0;">:إدرج السؤال في الخانة المخصصة لذلك ثم قم بالإرسال بالنقر على الزر إرسال اسفله #</h4> <br> 
+  <h4 style="color:rgb(44, 44, 232); text-align: center; margin-bottom: 0;">Insérez votre question dans le champ prévu à cet effet, puis procédez à l’envoi. En cliquant sur le bouton Envoyer ci-dessous.</h4> <br> 
   
-  <textarea name="message" placeholder="Write your message shortly here" id="textarea" cols="30" rows="10" required></textarea><br><br>
-  <button type="submit">إرسال</button> 
+  <textarea name="message" placeholder="Rédigez brièvement votre message ici." id="textarea" cols="30" rows="10" required></textarea><br><br>
+  <button type="submit">Envoyer</button> 
  </form>
 
   <p id="status"></p>
