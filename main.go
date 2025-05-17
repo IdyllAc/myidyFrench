@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/gorilla/sessions"
 	"github.com/joho/godotenv"
 	"github.com/markbates/goth"
@@ -16,28 +18,34 @@ import (
 	"github.com/markbates/goth/providers/facebook"
 	"github.com/markbates/goth/providers/github"
 	"github.com/markbates/goth/providers/google"
-
-	_ "github.com/mattn/go-sqlite3" // Use this or modernc.org/sqlite
+	"golang.org/x/net/context"
 )
 
 var db *sql.DB
 
 func main() {
-	godotenv.Load()
+	err := godotenv.Load() // Load .env environment variables
 
-	// Load SESSION_SECRET from env file
+	if err != nil {
+		log.Println("⚠️ .env not loaded, using system env")
+	}
+
+	// Set SESSION_SECRET for Goth
 	key := os.Getenv("SESSION_SECRET")
 	if key == "" {
 		log.Fatal("❌ SESSION_SECRET is missing in .env")
 	}
+	log.Println("✅ SESSION_SECRET loaded successfully!")
+	// 30 days
 
 	store := sessions.NewCookieStore([]byte(key))
-	store.MaxAge(86400 * 30) // 30 days
+	store.MaxAge(86400 * 30)
+	store.Options.Path = "/"
 	store.Options.HttpOnly = true
 	store.Options.Secure = false
 	gothic.Store = store
 
-	// Initialize OAuth providers
+	// Set up Goth with providers
 	goth.UseProviders(
 		facebook.New(
 			os.Getenv("FACEBOOK_KEY"),
@@ -57,66 +65,80 @@ func main() {
 		),
 	)
 
-	// Connect to SQLite DB
-	var err error
-	db, err = sql.Open("sqlite3", "./DB_subscribers.db")
+	db, err = sql.Open("sqlite", "./subscribe/DB_subscribers.db")
 	if err != nil {
 		log.Fatal("❌ DB connection failed:", err)
 	}
 	defer db.Close()
-
 	createTables()
 
-	// Routes
-	http.Handle("/", http.FileServer(http.Dir("./static")))
+	// http.Handle("/",
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
+
+	http.HandleFunc("/", serveIndex)
 	http.HandleFunc("/subscribe", serveSubscribe)
-	http.HandleFunc("/subscribe/email", handleEmailSubscription)
+	http.HandleFunc("/subscriber/email", handleEmailSubscription)
+	http.HandleFunc("/verify", handleEmailVerification)
 	http.HandleFunc("/subscribers", handleListSubscribers)
 	http.HandleFunc("/view-emails", handleViewEmails)
 	http.HandleFunc("/submit", handleFormSubmission)
 
-	// OAuth Routes
-	http.HandleFunc("/auth/facebook", handleFacebookLogin)
-	http.HandleFunc("/auth/facebook/callback", handleFacebookCallback)
-	http.HandleFunc("/auth/google", handleGoogleLogin)
-	http.HandleFunc("/auth/google/callback", handleGoogleCallback)
-	http.HandleFunc("/auth/github", handleGitHubLogin)
-	http.HandleFunc("/auth/github/callback", handleGitHubCallback)
+	http.HandleFunc("/auth/facebook", handleOAuthLogin("facebook"))
+	http.HandleFunc("/auth/facebook/callback", handleOAuthCallback("facebook"))
+	http.HandleFunc("/auth/google", handleOAuthLogin("google"))
+	http.HandleFunc("/auth/google/callback", handleOAuthCallback("google"))
+	http.HandleFunc("/auth/github", handleOAuthLogin("github"))
+	http.HandleFunc("/auth/github/callback", handleOAuthCallback("github"))
 
-	fmt.Println("✅ Server running on http://localhost:8080")
+	log.Println("🌐 Server started at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+// ✅ This function is now outside of main
 func createTables() {
+	// Make sure db is initialized and open
+	if db == nil {
+		log.Fatal("❌ DB is not initialized")
+	}
+
 	subscriberTable := `
 	CREATE TABLE IF NOT EXISTS subscribers (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		email TEXT UNIQUE NOT NULL
+		email TEXT NOT NULL UNIQUE,
+		verified BOOLEAN DEFAULT 0
 	);`
+
 	messageTable := `
 	CREATE TABLE IF NOT EXISTS messages (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		subscriber_id INTEGER,
 		message TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY(subscriber_id) REFERENCES subscribers(id)
+		FOREIGN KEY (subscriber_id) REFERENCES subscribers(id)
 	);`
+
 	_, err := db.Exec(subscriberTable)
 	if err != nil {
-		log.Fatal("❌ Failed to create subscribers table:", err)
+		log.Fatalf("❌ Failed to create subscribers table: %v", err)
 	}
+
 	_, err = db.Exec(messageTable)
 	if err != nil {
-		log.Fatal("❌ Failed to create messages table:", err)
+		log.Fatalf("❌ Failed to create messages table: %v", err)
 	}
 }
 
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "./static/index.html")
+}
+
 func serveSubscribe(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		http.ServeFile(w, r, "./static/subscribe.html")
-	} else {
-		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
 	}
+	http.ServeFile(w, r, "./static/subscribe.html")
 }
 
 func handleEmailSubscription(w http.ResponseWriter, r *http.Request) {
@@ -124,72 +146,107 @@ func handleEmailSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
-	email := r.FormValue("email")
-	message := r.FormValue("message")
 
-	if email == "" || message == "" {
-		http.Error(w, "Email and message are required", http.StatusBadRequest)
+	email := r.FormValue("email")
+	if email == "" {
+		http.Error(w, "Email is required", http.StatusBadRequest)
 		return
 	}
 
-	// Step 1: Insert or ignore subscriber
+	// Insert or ignore subscriber
 	_, err := db.Exec("INSERT OR IGNORE INTO subscribers(email) VALUES(?)", email)
 	if err != nil {
 		http.Error(w, "❌ Could not save email: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Step 2: Get subscriber ID
+	// Get subscriber ID (in case we need it later)
 	var id int
 	err = db.QueryRow("SELECT id FROM subscribers WHERE email = ?", email).Scan(&id)
 	if err != nil {
-		http.Error(w, "❌ Could not fetch ID: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "❌ Could not retrieve subscriber ID: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Step 3: Insert message
-	_, err = db.Exec("INSERT INTO messages(subscriber_id, message) VALUES(?, ?)", id, message)
-	if err != nil {
-		http.Error(w, "❌ Could not save message: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Step 4: Save email to .txt file
-	f, err := os.OpenFile("subscribers_emails.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Append to file
+	f, err := os.OpenFile("subscriber_emails.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		defer f.Close()
-		f.WriteString(email + "\n")
+		_, _ = f.WriteString(email + "\n")
+	} else {
+		log.Println("⚠️ Failed to write email to file:", err)
 	}
 
-	// Step 5: Send confirmation email
+	// Generate verification link
 	link := "http://localhost:8080/verify?email=" + url.QueryEscape(email)
 	sendConfirmationEmail(email, link)
 
-	fmt.Fprintf(w, "✅ Thanks %s! Confirmation sent.", email)
+	// Respond to browser
+	fmt.Fprintf(w, "✅ Message received! Thank you.")
+
+	// Console log for developer
+	log.Println("📥 Subscription received for:", email)
+	fmt.Println("🔗 Verification link:", link)
 }
 
-func sendConfirmationEmail(to, link string) {
-	from := os.Getenv("SMTP_EMAIL")
-	password := os.Getenv("SMTP_PASS")
+func sendConfirmationEmail(to string, link string) {
+	from := os.Getenv("EMAIL_ADDRESS")
+	password := os.Getenv("EMAIL_PASSWORD")
+
+	if from == "" || password == "" {
+		log.Println("❌ EMAIL_ADDRESS or EMAIL_PASSWORD is not set in .env")
+		return
+	}
 
 	subject := "Please verify your email"
-	body := fmt.Sprintf("Click the link to confirm:\n%s", link)
+	body := fmt.Sprintf("Hello,\n\nPlease click the link below to confirm your subscription:\n\n%s\n\nThanks!", link)
 
-	msg := "From: " + from + "\nTo: " + to + "\nSubject: " + subject + "\n\n" + body
+	// Full message with CRLF line endings (for better SMTP compliance)
+	msg := []byte("From: " + from + "\r\n" +
+		"To: " + to + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/plain; charset=\"UTF-8\"\r\n" +
+		"\r\n" +
+		body + "\r\n")
 
-	err := smtp.SendMail("smtp.gmail.com:587",
+	// Send the email using Gmail's SMTP
+	err := smtp.SendMail(
+		"smtp.gmail.com:587",
 		smtp.PlainAuth("", from, password, "smtp.gmail.com"),
-		from, []string{to}, []byte(msg))
+		from,
+		[]string{to},
+		msg,
+	)
 
 	if err != nil {
 		log.Println("❌ Email send failed:", err)
 	} else {
-		log.Println("✅ Email sent to:", to)
+		log.Println("✅ Confirmation email sent to:", to)
+		log.Println("🔗 Verification link:", link) // Log the link for development/debug
 	}
 }
 
+// ✅ New handler to verify email
+func handleEmailVerification(w http.ResponseWriter, r *http.Request) {
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		http.Error(w, "Missing email in verification link", http.StatusBadRequest)
+		return
+	}
+
+	// ✅ Update the 'verified' field to true (1)
+	_, err := db.Exec("UPDATE subscribers SET verified = 1 WHERE email = ?", email)
+	if err != nil {
+		http.Error(w, "❌ Failed to verify email: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "✅ Thank you %s, your email is now verified!", email)
+}
+
 func handleListSubscribers(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT email FROM subscribers")
+	rows, err := db.Query("SELECT email FROM subscribers WHERE Verified = 1")
 	if err != nil {
 		http.Error(w, "Failed to fetch subscribers", http.StatusInternalServerError)
 		return
@@ -204,7 +261,7 @@ func handleListSubscribers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleViewEmails(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile("subscribers_emails.txt")
+	data, err := os.ReadFile("subscriber_emails.txt")
 	if err != nil {
 		http.Error(w, "❌ Cannot read file", http.StatusInternalServerError)
 		return
@@ -217,7 +274,14 @@ func handleFormSubmission(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		email := r.FormValue("email")
 		message := r.FormValue("message")
+
+		if email == "" || message == "" {
+			http.Error(w, "Email and message are required", http.StatusBadRequest)
+			return
+		}
+
 		fmt.Printf("📩 New message from %s: %s\n", email, message)
+
 		w.Write([]byte("✅ Message received!"))
 	} else {
 		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
@@ -225,41 +289,25 @@ func handleFormSubmission(w http.ResponseWriter, r *http.Request) {
 }
 
 // OAuth handlers
-func handleFacebookLogin(w http.ResponseWriter, r *http.Request) {
-	r.URL.RawQuery = "provider=facebook"
-	gothic.BeginAuthHandler(w, r)
-}
-func handleFacebookCallback(w http.ResponseWriter, r *http.Request) {
-	user, err := gothic.CompleteUserAuth(w, r)
-	if err != nil {
-		http.Error(w, "Facebook login failed", http.StatusInternalServerError)
-		return
+
+func handleOAuthLogin(provider string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(context.WithValue(r.Context(), gothic.ProviderParamKey, provider))
+		gothic.BeginAuthHandler(w, r)
 	}
-	fmt.Fprintf(w, "✅ Logged in via Facebook\nName: %s\nEmail: %s", user.Name, user.Email)
 }
 
-func handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
-	r.URL.RawQuery = "provider=google"
-	gothic.BeginAuthHandler(w, r)
-}
-func handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
-	user, err := gothic.CompleteUserAuth(w, r)
-	if err != nil {
-		http.Error(w, "Google login failed", http.StatusInternalServerError)
-		return
-	}
-	fmt.Fprintf(w, "✅ Logged in via Google\nName: %s\nEmail: %s", user.Name, user.Email)
-}
+func handleOAuthCallback(provider string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(context.WithValue(r.Context(), gothic.ProviderParamKey, provider))
+		user, err := gothic.CompleteUserAuth(w, r)
+		if err != nil {
+			http.Error(w, provider+" login failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "✅ Logged in via %s\nName: %s\nEmail: %s", provider, user.Name, user.Email)
 
-func handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
-	r.URL.RawQuery = "provider=github"
-	gothic.BeginAuthHandler(w, r)
-}
-func handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
-	user, err := gothic.CompleteUserAuth(w, r)
-	if err != nil {
-		http.Error(w, "GitHub login failed", http.StatusInternalServerError)
-		return
+		log.Println("🌐 Server started at http://localhost:8080")
 	}
-	fmt.Fprintf(w, "✅ Logged in via GitHub\nName: %s\nEmail: %s", user.Name, user.Email)
+
 }

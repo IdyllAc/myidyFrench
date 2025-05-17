@@ -3,13 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <title>Subscribe to News</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="CSS/style.css">
 
   <style>
-    body { font-family: Arial; padding: 2rem; text-align: center;}
-    input[type="email"] { padding: 0.5rem; width: 300px; }
-    a, input[type="submit"] { padding: 0.5rem 1rem; text-decoration: none; margin-left: 0.5rem; display: inline-block; }
-    form { margin-top: 1rem; }
+     body {
+      font-family: Arial, sans-serif;
+      padding: 2rem;
+      text-align: center;
+    }
+    input[type="email"], textarea {
+      padding: 0.5rem;
+      width: 300px;
+      margin-bottom: 1rem;
+    }
+    button, a {
+      padding: 0.5rem 1rem;
+      margin: 0.5rem;
+      display: inline-block;
+      text-decoration: none;
+    }
+    form {
+      margin: 2rem 0;
+    }
     /* .facebook { background-color: #3b5998; }
     .google { background-color: #db4437; } */
   </style>
@@ -19,36 +34,36 @@
   <p>Choisissez votre mode d’abonnement:</p>
 
   <h2>📧 Abonnez-vous par email.</h2>
-  <form action="/subscribe/email" method="POST">
+  <form action="/subscriber/email" method="POST" id="email-form">
     <input type="email" name="email" placeholder="Insérez votre email" required />
-    <button type="submit">Abonner</button>
+    <button type="submit">Envoyer</button>
   </form> 
 
   <hr>
 
-  
-  
-  <h2 style="display: inline-block; position:fixed">
-    <h2>:And so on/Et aissi de suite/وكذلك ايضاً</h2>
-    <p>login via:</p>
-  <a href="/auth/facebook">🔵 Facebook</a><br>
-  <h3>:Or via/Ou via/او عبر</h3>
-  <p>login avec:</p>
-  <a href="/auth/google">🟢 Google</a></h2>
+  <section>
+    <h2>📱 Social Login</h2>
+    <p>:And so on / Et aussi de suite / وكذلك أيضاً</p>
+    <p>Login via:</p>
+    <a href="/auth/facebook">🔵 Facebook</a>
+    <h3>:Or via / Ou via / أو عبر</h3>
+    <p>Login with:</p>
+    <a href="/auth/google">🟢 Google</a>
+  </section>
 
-<!-- <ul>
-     <li><a href="/subscribe/facebook" style="background:#3b5998; color:white;">📘 Continue with Facebook</a></li> <br><br>
-    <li><a href="/subscribe/google" style="background:#db4437; color:white;">🔎 Continue with Google</a></li> <br> <br> 
-    <h1>Gmail Integration</h1>
-    <h3>Connect to Gmail</h3>
-    <li><a href="/auth">Connect Gmail</a></li>
-  </ul> -->
+  <hr>
 
-  <br><hr>
-<h5>If you have any proplem in crossing any parier,  contact us. // Si vous avez des difficultés à franchir une barière, contactez nous. // .إذا واجهت اي مشكلة في تخطئ حاجر, إتصل بنا</h5>
-<h4 style="color: #333; text-align:center; margin-bottom: 0;">Pour poser vos questions et obtenir plus d’informations, saisissez votre adresse e-mail, formulez votre question, puis envoyez-la, "valide email".</h4>
+<h5 style="color: #333;">
+  If you have any proplem in crossing any parier,  contact us. // 
+  Si vous avez des difficultés à franchir une barière, contactez nous. // 
+  .إذا واجهت اي مشكلة في تخطئ حاجر, إتصل بنا
+</h5>
+
+<h4 style="color: #333; text-align:center; margin-bottom: 0;">
+  Pour poser vos questions et obtenir plus d’informations, saisissez votre adresse e-mail, formulez votre question, puis envoyez-la, "valide email".
+</h4>
   
-<form action="/submit" method="POST">
+<form action="/submit" method="POST" id="message-form">
   <!-- <label for="email" style="color: lime;" >Email:</label><br> -->
    <input type="email" name="email" placeholder="Insérez votre email" required><br>
   <!-- <label for="message" style="color: lime;" >Your Message:</label> -->
@@ -61,17 +76,18 @@
   <p id="status"></p>
 
   <script>
-    // Optional: handle response without page reload
-    const form = document.querySelector("form");
-    const status = document.getElementById("status");
-
-    form.addEventListener("submit", async (e) => {
+    // Handle async form submission only for the subscription form
+    document.getElementById("email-form").addEventListener("submit", async (e) => {
       e.preventDefault();
+      const form = e.target;
       const formData = new FormData(form);
-      const res = await fetch("/subscribe", {
+      const status = document.getElementById("status");
+
+      const res = await fetch(form.action, {
         method: "POST",
         body: formData
       });
+
       const text = await res.text();
       status.textContent = text;
     });
